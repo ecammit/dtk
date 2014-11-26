@@ -1,0 +1,283 @@
+#!/usr/bin/perl -w
+use strict;
+
+use constant AGGREGATE_DEPENDENCIES => {
+	count     => [qw(count)],
+	min       => [qw(min)],
+	max       => [qw(max)],
+	sum       => [qw(sum)],
+	mean      => [qw(count sum)],
+	variance  => [qw(count sum sum^2)],
+	stddev    => [qw(count sum sum^2)],
+	skew      => [qw(count sum sum^2 sum^3)],
+	uniques   => [qw(uniques)],
+	allvalues => [qw(allvalues)],
+};
+
+use constant AGGREGATE_FUNCTIONS => keys %{ (AGGREGATE_DEPENDENCIES) };
+
+if (!@ARGV || @ARGV < 3 || $ARGV[0] =~ /^(?:\-\?|\-h|\-\-help)$/) {
+    print STDERR <<'EOF';
+usage: dtk pivot <rows> <columns> <data>
+
+This tool will turn each distinct val in the pivot column into a new column containing
+the val of the specified data column.
+
+<rows> is a comma-separated list of rows from the input (starting at 1)
+to consolidate unique values from those columns along the row axis of
+the output.
+
+<columns> is a comma-separated list of rows from the input (starting at
+1) to consolidate unique values from those columns along the column axis
+of the output.
+
+<data> is a comma-separated list of aggregate functions, whose argument
+is the row number from the input that contains the data to run the
+aggregate function on for each value of that input row when consolidated
+by the unique <rows> and <columns> combinations.
+
+example dataset:
+
+2014-11-01      eric    abc     123
+2014-11-01      tim     abc     1
+2014-11-01      eric    zyx     321
+2014-11-02      tim     abc     456
+2014-11-02      eric    zyx     654
+2014-11-02      tim     zyx     4
+
+We calculate a simple sum() of input column 4 when grouping by unique
+values from input columns 1 and 2:
+
+$ dtk pivot 1 2 "sum(4)" < data | pr -T -e12
+            eric        tim
+2014-11-01  444         1
+2014-11-02  654         460
+
+We can also add an additional aggregate function. When we do so, an
+additional column is added to the output to distinguish the function
+that was used:
+
+$ dtk pivot 1 2 "sum(4),mean(4)" < data | pr -T -e12
+                        eric        tim
+2014-11-01  sum(4)      444         1
+            mean(4)     222         1
+2014-11-02  sum(4)      654         460
+            mean(4)     654         230
+
+We can specify an additional input column to group on the output row:
+
+$ dtk pivot 1,3 2 "sum(4),mean(4)" < data | pr -T -e12
+                                    eric        tim
+2014-11-01  abc         sum(4)      123         1
+                        mean(4)     123         1
+2014-11-01  zyx         sum(4)      321         
+                        mean(4)     321         
+2014-11-02  abc         sum(4)                  456
+                        mean(4)                 456
+2014-11-02  zyx         sum(4)      654         4
+                        mean(4)     654         4
+
+Or we can specify that additional input column on the output column to
+put the extra combination of values there:
+
+$ dtk pivot 1 2,3 "sum(4)" < data | pr -T -e12
+            eric        eric        tim         tim
+            abc         zyx         abc         zyx
+2014-11-01  123         321         1           
+2014-11-02              654         456         4
+
+Some aggregate functions output multiple items per cell. Each item is
+separated by a comma:
+
+$ dtk pivot 1 2 "uniques(4)" < data | pr -T -e12
+            eric        tim
+2014-11-01  123,321     1
+2014-11-02  654         456,4
+
+The supported aggregate functions are: 
+EOF
+	print STDERR "\n";
+	print STDERR " - $_\n" for AGGREGATE_FUNCTIONS;
+	print STDERR "\n";
+  exit 1;
+}
+
+sub aggregate($$@) {
+	my $ag_funcs_def = $_[0];
+	my @vals = @_[2..@_-1];
+	for my $i (0..@vals-1) {
+		$_[1] ||= [];
+		$_[1]->[$i] ||= {};
+		my $needed_aggregates = AGGREGATE_DEPENDENCIES->{$ag_funcs_def->[$i]};
+		if (grep {$_ eq 'count'} @$needed_aggregates) {
+			$_[1]->[$i]->{count} ||= 0;
+			$_[1]->[$i]->{count}++;
+		}
+		if (grep {$_ eq 'max'} @$needed_aggregates) {
+			$_[1]->[$i]->{max} = $vals[$i] if !exists $_[1]->[$i]->{max} || $vals[$i] > $_[1]->[$i]->{max};
+		}
+		if (grep {$_ eq 'min'} @$needed_aggregates) {
+			$_[1]->[$i]->{min} = $vals[$i] if !exists $_[1]->[$i]->{min} || $vals[$i] < $_[1]->[$i]->{min};
+		}
+		if (grep {$_ eq 'sum'} @$needed_aggregates) {
+			$_[1]->[$i]->{sum} ||= 0;
+			$_[1]->[$i]->{sum} += $vals[$i];
+		}
+		if (grep {$_ eq 'sum^2'} @$needed_aggregates) {
+			$_[1]->[$i]->{'sum^2'} ||= 0;
+			$_[1]->[$i]->{'sum^2'} += $vals[$i]**2;
+		}
+		if (grep {$_ eq 'sum^3'} @$needed_aggregates) {
+			$_[1]->[$i]->{'sum^3'} ||= 0;
+			$_[1]->[$i]->{'sum^3'} += $vals[$i]**3;
+		}
+		if (grep {$_ eq 'uniques'} @$needed_aggregates) {
+			$_[1]->[$i]->{uniques} ||= {};
+			$_[1]->[$i]->{uniques}->{$vals[$i]} = 1;
+		}
+		if (grep {$_ eq 'allvalues'} @$needed_aggregates) {
+			$_[1]->[$i]->{allvalues} ||= [];
+			push @{$_[1]->[$i]->{allvalues}}, $vals[$i];
+		}
+	}
+}
+
+
+sub permute(@) {
+	my @results;
+	while (@_) {
+		my $current_set = pop @_;
+		if (@results) {
+			my @new_results;
+			foreach my $result (@results) {
+				push @new_results, $_ . "\t" . $result for @$current_set;
+			}
+			@results = @new_results;
+		} else {
+			@results = @$current_set;
+		}
+	}
+	return @results;
+}
+
+
+my ($raw_row_def, $raw_col_def, $raw_data_def) = @ARGV;
+$raw_row_def =~ s/\s//g;
+$raw_col_def =~ s/\s//g;
+$raw_data_def =~ s/\s//g;
+
+if ($raw_row_def !~ /^[0-9]+(?:,[0-9]+)*$/ || $raw_col_def !~ /^[0-9]+(?:,[0-9]+)*$/) {
+	print STDERR "The <rows> and <columns> definitions can only be a comma-separated list of numbers.\n";
+	exit 1;
+}
+
+my $functions_regex = '(?:' . join("|", AGGREGATE_FUNCTIONS) . ')\([0-9]+\)';
+if ($raw_data_def !~ /^$functions_regex(?:,$functions_regex)*$/i) {
+	print STDERR "The <data> definition must be a comma-separated list of aggregate functions applied to an input column number.\n";
+	print STDERR "The supported aggregate functions are: \n";
+	print STDERR " - $_\n" for AGGREGATE_FUNCTIONS;
+	print STDERR "\n";
+	print STDERR "Example: sum(4),average(3)\n";
+	print STDERR "\n";
+	exit 1;
+}
+
+my @row_def = map {$_-1} split /,/, $raw_row_def, -1;
+my @col_def = map {$_-1} split /,/, $raw_col_def, -1;
+my @data_def = map {$_=~s/^[a-z]+\(([0-9]+)\)/$1/i;$_-1} split /,/, $raw_data_def, -1;
+my @ag_funcs_def = map {$_=~s/^([a-z]+)\([0-9]+\)/$1/;$_} split /,/, lc($raw_data_def), -1;
+
+my @distinct_vals = map {{}} @row_def, @col_def;
+my %aggregates;
+
+
+while (<STDIN>) {
+	chomp;
+	my @row = (split /\t/, $_, -1)[@row_def, @col_def, @data_def];
+	my $lookup_key = join "\t", @row[0..@row_def+@col_def-1];
+	aggregate(\@ag_funcs_def, $aggregates{$lookup_key}, @row[@row-@data_def..@row-1]);
+
+	$distinct_vals[$_]->{$row[$_]} = 1 for (0..@row_def+@col_def-1);
+}
+
+my @row_permutations = permute(map {[keys %$_]} @distinct_vals[0..@row_def-1]);
+my @col_permutations = permute(map {[keys %$_]} @distinct_vals[@row_def..@row_def+@col_def-1]);
+
+for my $x (0..@col_def-1) {
+	print "\t" x @row_def . (@ag_funcs_def > 1 ? "\t" : "") . join("\t", map {(split "\t", $_)[$x]} sort @col_permutations) . "\n";
+}
+
+for my $row (sort @row_permutations) {
+	for my $ag_num (0..@ag_funcs_def-1) {
+		my @row_result;
+		for my $col (sort @col_permutations) {
+			my $ag_result = '';
+			if ($aggregates{"$row\t$col"}->[$ag_num]) {
+				if ($ag_funcs_def[$ag_num] eq 'count'
+					&& exists $aggregates{"$row\t$col"}->[$ag_num]->{count}) {
+					$ag_result = $aggregates{"$row\t$col"}->[$ag_num]->{count};
+				} elsif ($ag_funcs_def[$ag_num] eq 'min'
+					&& exists $aggregates{"$row\t$col"}->[$ag_num]->{min}) {
+					$ag_result = $aggregates{"$row\t$col"}->[$ag_num]->{min};
+				} elsif ($ag_funcs_def[$ag_num] eq 'max'
+					&& exists $aggregates{"$row\t$col"}->[$ag_num]->{max}) {
+					$ag_result = $aggregates{"$row\t$col"}->[$ag_num]->{max};
+				} elsif ($ag_funcs_def[$ag_num] eq 'sum'
+					&& exists $aggregates{"$row\t$col"}->[$ag_num]->{sum}) {
+					$ag_result = $aggregates{"$row\t$col"}->[$ag_num]->{sum};
+				} elsif ($ag_funcs_def[$ag_num] eq 'mean'
+					&& exists $aggregates{"$row\t$col"}->[$ag_num]->{sum}
+					&& exists $aggregates{"$row\t$col"}->[$ag_num]->{count}) {
+					$ag_result = $aggregates{"$row\t$col"}->[$ag_num]->{sum} / $aggregates{"$row\t$col"}->[$ag_num]->{count};
+				} elsif ($ag_funcs_def[$ag_num] eq 'variance'
+					&& exists $aggregates{"$row\t$col"}->[$ag_num]->{sum}
+					&& exists $aggregates{"$row\t$col"}->[$ag_num]->{'sum^2'}
+					&& exists $aggregates{"$row\t$col"}->[$ag_num]->{count}
+					&& $aggregates{"$row\t$col"}->[$ag_num]->{count} > 0) {
+					my $ex1 = $aggregates{"$row\t$col"}->[$ag_num]->{sum} / $aggregates{"$row\t$col"}->[$ag_num]->{count};
+					my $ex2 = $aggregates{"$row\t$col"}->[$ag_num]->{'sum^2'} / $aggregates{"$row\t$col"}->[$ag_num]->{count};
+					my $variance = $ex2 - $ex1**2;
+					$ag_result = $variance;
+				} elsif ($ag_funcs_def[$ag_num] eq 'stddev'
+					&& exists $aggregates{"$row\t$col"}->[$ag_num]->{sum}
+					&& exists $aggregates{"$row\t$col"}->[$ag_num]->{'sum^2'}
+					&& exists $aggregates{"$row\t$col"}->[$ag_num]->{count}
+					&& $aggregates{"$row\t$col"}->[$ag_num]->{count} > 0) {
+					my $ex1 = $aggregates{"$row\t$col"}->[$ag_num]->{sum} / $aggregates{"$row\t$col"}->[$ag_num]->{count};
+					my $ex2 = $aggregates{"$row\t$col"}->[$ag_num]->{'sum^2'} / $aggregates{"$row\t$col"}->[$ag_num]->{count};
+					my $variance = $ex2 - $ex1**2;
+					my $stddev = sqrt($variance);
+					$ag_result = $stddev;
+				} elsif ($ag_funcs_def[$ag_num] eq 'skew'
+					&& exists $aggregates{"$row\t$col"}->[$ag_num]->{sum}
+					&& exists $aggregates{"$row\t$col"}->[$ag_num]->{'sum^2'}
+					&& exists $aggregates{"$row\t$col"}->[$ag_num]->{'sum^3'}
+					&& exists $aggregates{"$row\t$col"}->[$ag_num]->{count}
+					&& $aggregates{"$row\t$col"}->[$ag_num]->{count} > 0) {
+					my $ex1 = $aggregates{"$row\t$col"}->[$ag_num]->{sum} / $aggregates{"$row\t$col"}->[$ag_num]->{count};
+					my $ex2 = $aggregates{"$row\t$col"}->[$ag_num]->{'sum^2'} / $aggregates{"$row\t$col"}->[$ag_num]->{count};
+					my $ex3 = $aggregates{"$row\t$col"}->[$ag_num]->{'sum^3'} / $aggregates{"$row\t$col"}->[$ag_num]->{count};
+					my $variance = $ex2 - $ex1**2;
+					my $stddev = sqrt($variance);
+					if ($stddev > 0) {
+						my $skew = ($ex3 - 3 * $ex1 * $ex2 + 2 * $ex1**3) / $stddev**3;
+						$ag_result = $skew;
+					}
+				} elsif ($ag_funcs_def[$ag_num] eq 'uniques'
+					&& exists $aggregates{"$row\t$col"}->[$ag_num]->{uniques}) {
+					$ag_result = join ",", keys %{$aggregates{"$row\t$col"}->[$ag_num]->{uniques}};
+				} elsif ($ag_funcs_def[$ag_num] eq 'allvalues'
+					&& exists $aggregates{"$row\t$col"}->[$ag_num]->{allvalues}) {
+					$ag_result = join ",", @{$aggregates{"$row\t$col"}->[$ag_num]->{allvalues}};
+				}
+			}
+			push @row_result, $ag_result;
+		}
+
+		my $row_name = "$row\t";
+		$row_name =~ s/[^\t]//g if $ag_num != 0;
+		print $row_name;
+		print $ag_funcs_def[$ag_num] . "(" . ($data_def[$ag_num]+1). ")\t" if @ag_funcs_def > 1;
+		print join("\t", @row_result) . "\n";
+	}
+}
