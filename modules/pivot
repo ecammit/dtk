@@ -193,7 +193,8 @@ my %aggregates;
 
 while (<STDIN>) {
 	chomp;
-	my @row = (split /\t/, $_, -1)[@row_def, @col_def, @data_def];
+	my @split_row = split /\t/, $_, -1;
+	my @row = @split_row[@row_def, @col_def, @data_def];
 	my $lookup_key = join "\t", @row[0..@row_def+@col_def-1];
 	aggregate(\@ag_funcs_def, $aggregates{$lookup_key}, @row[@row-@data_def..@row-1]);
 
