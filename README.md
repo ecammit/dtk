@@ -26,11 +26,11 @@ $ cat <(zcat | dtk parse | dtk filter) <(zcat | dtk parse | dtk filter) | dtk de
 
 Some DTK pipelines work like [map-reduce](http://en.wikipedia.org/wiki/MapReduce) jobs, and, in fact, the DTK suite is also quite effective when run in true [big data](http://en.wikipedia.org/wiki/Big_data) map-reduce environments such as [Hadoop Streaming](http://hadoop.apache.org/docs/stable/streaming.html).
 
-DTK prioritizes usefulness and efficiency over shiny interfaces and PowerPoint presentations.  These aren't your boss' tools (unless he also likes this sort of thing, of course).
+DTK prioritizes usefulness and efficiency over shiny interfaces and PowerPoint presentations.  These aren't your boss' tools (unless they also like this sort of thing, of course).
 
 # ``dtk``
 
-The main ``dtk`` launcher, which is normally at ``/usr/bin/dtk``, is responsible for finding and invoking the individual modules, which are normally in ``/usr/libexec/dtk-modules``. To invoke a module, use ``dtk <module>``, much as you would with ``git``. If you would like to load modules from a different directory (such as during ``dtk`` development or in a homedir-local install), set the ``DTK_MODPATH`` environment variable to a colon-delimited list of module directories, much like the ``PATH`` environment variable.  An empty string as one of the parts of ``DTK_MODPATH`` will be replaced with the default (``/usr/libexec/dtk-modules``), making it easy to provide overly directories by using something like ``:~/dtk-modules`` (which would expand to ``/usr/libexec/dtk-modules`` and ``~/dtk-modules``).
+The main ``dtk`` launcher, which is normally at ``/usr/bin/dtk``, is responsible for finding and invoking the individual modules, which are normally in ``/usr/libexec/dtk-modules``. To invoke a module, use ``dtk <module>``, much as you would with ``git``. If you would like to load modules from a different directory (such as during ``dtk`` development or in a homedir-local install), set the ``DTK_MODPATH`` environment variable to a colon-delimited list of module directories, much like the ``PATH`` environment variable.  An empty string as one of the parts of ``DTK_MODPATH`` will be replaced with the default (``/usr/libexec/dtk-modules``), making it easy to provide overlay directories by using something like ``:~/dtk-modules`` (which would expand to ``/usr/libexec/dtk-modules`` and ``~/dtk-modules``).
 
 To get details on a specific module, use ``dtk help <module>``, which simply invokes ``dtk <module> --help`` for you.
 
@@ -275,7 +275,7 @@ Keeping timestamps in epoch time has significant advantages when used with the h
 
 ## ``plot``
 
-This tool will draw simple 2d scatterplots. Its input should consist of two-column data containing x and y coordinates; optionally, a third column can be provided which indicates the color (1-7) to use for the point. If the viewport bounds are not specified, all data will be read before any output is produced so the viewport can be automatically adjusted to fit the whole dataset. If all viewport bounds are given, the scatterplot will be drawn as data is read, allowing, for example, an animated chart from a ``tail -f`` of an access log. Extents can either be given together as ``view=<xl>..<xh>,<yl>..<yh>`` or individually as ``xl=<position>, yh=<position>``, etc.
+This tool will draw simple 2d scatterplots. Its input should consist of two-column data containing x and y coordinates; optionally, a third column can be provided which indicates the color (1-7) to use for the point. If the viewport bounds are not specified, all data will be read before any output is produced so the viewport can be automatically adjusted to fit the whole dataset. If all viewport bounds are given, the scatterplot will be drawn as data is read, allowing, for example, an animated chart from a ``tail -f`` of an access log. Extents can either be given together as ``view=<xl>..<xh>,<yl>..<yh>`` or individually as ``xl=<position>``, ``yh=<position>``, etc.
 
 Here is a plot of ``sin(x)`` and ``cos(x)``:
 
